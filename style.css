@@ -1,0 +1,141 @@
+.thread_tools_hint {
+    font-size: 0.85em;
+    opacity: 0.8;
+    margin-bottom: 0.5em;
+}
+
+/* Feature sections inside the Thread Tools drawer */
+.thread_tools_features {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.thread_tools_feature > .inline-drawer-header {
+    font-weight: 600;
+}
+
+.thread_tools_feature > .inline-drawer-content {
+    padding: 4px 4px 8px 8px;
+}
+
+.thread_tools_feature_off .thread_tools_feature_title {
+    opacity: 0.55;
+}
+
+.thread_tools_feature_off .thread_tools_feature_body {
+    opacity: 0.55;
+}
+
+/* Profile model memory */
+.thread_tools_list_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.5em;
+}
+
+.thread_tools_endpoints {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.thread_tools_endpoint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+}
+
+.thread_tools_endpoint_text {
+    flex: 1;
+    min-width: 0;
+}
+
+.thread_tools_endpoint_url,
+.thread_tools_endpoint_model {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread_tools_endpoint_url {
+    font-size: 0.85em;
+    opacity: 0.75;
+}
+
+/* Profile editor popup */
+.thread_tools_pe {
+    text-align: left;
+}
+
+.thread_tools_pe h3 {
+    margin: 0 0 0.25em;
+}
+
+.thread_tools_pe_name {
+    display: grid;
+    grid-template-columns: 9em 1fr;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.thread_tools_pe_fields {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.thread_tools_pe_row {
+    display: grid;
+    grid-template-columns: minmax(9em, 14em) 1fr;
+    align-items: start;
+    gap: 8px;
+}
+
+.thread_tools_pe_row > .checkbox_label {
+    padding-top: 6px;
+}
+
+.thread_tools_pe_row .text_pole {
+    margin: 0;
+    width: 100%;
+}
+
+.thread_tools_pe_row_off > :not(.checkbox_label) {
+    opacity: 0.5;
+}
+
+.thread_tools_pe_model {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px;
+    align-items: center;
+}
+
+.thread_tools_pe_model .menu_button {
+    margin: 0;
+}
+
+.thread_tools_pe_model_status {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+@media (max-width: 600px) {
+    .thread_tools_pe_row,
+    .thread_tools_pe_name {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+
+    .thread_tools_pe_row > .checkbox_label {
+        padding-top: 0;
+    }
+}
