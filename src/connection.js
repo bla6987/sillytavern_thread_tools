@@ -134,7 +134,8 @@ function extractModelIds(data) {
  * @param {string} [target.url] Server URL from the profile
  * @returns {Promise<string[]>} Model IDs (empty if the endpoint couldn't be queried)
  */
-export async function fetchEndpointModels({ mode, api, url }) {
+export async function fetchEndpointModels({ mode, api, url }, { signal, timeoutMs = 15000 } = {}) {
+    if (signal?.aborted) throw signal.reason || new DOMException('Request cancelled', 'AbortError');
     const context = SillyTavern.getContext();
     const config = context.CONNECT_API_MAP?.[api];
     if (!config) {
@@ -160,21 +161,31 @@ export async function fetchEndpointModels({ mode, api, url }) {
         return [];
     }
 
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason || new DOMException('Request cancelled', 'AbortError'));
+    signal?.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(() => controller.abort(new DOMException('Model list request timed out', 'TimeoutError')), timeoutMs);
     try {
         const response = await fetch(endpoint, {
             method: 'POST',
             headers: context.getRequestHeaders(),
             body: JSON.stringify(body),
             cache: 'no-cache',
+            signal: controller.signal,
         });
         if (response.ok) {
             const ids = extractModelIds(await response.json());
+            if (controller.signal.aborted) throw controller.signal.reason;
             if (ids.length) {
                 return ids;
             }
         }
     } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason || error;
         console.warn('[Thread Tools] Model list request failed', error);
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
     }
 
     // Fall back to whatever list SillyTavern already has loaded for that API.

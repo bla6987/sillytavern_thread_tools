@@ -1,6 +1,7 @@
 import { LOG_PREFIX } from '../../core.js';
 import { findModel } from '../../endpoint-url.js';
 import { fetchEndpointModels } from '../../connection.js';
+import { RequestSlot } from '../../request-lifecycle.js';
 import {
     FIELD_LABELS,
     applyProfileEdits,
@@ -19,6 +20,8 @@ const DESCRIPTION_LABELS = new Set(['regex-preset', 'tokenizer', 'prompt-post-pr
 
 /** @type {import('../../core.js').FeatureApi} */
 let api;
+const openForms = new Set();
+let readySubscription = null;
 
 function getProfiles() {
     const manager = SillyTavern.getContext().extensionSettings.connectionManager;
@@ -168,7 +171,7 @@ function createControl(key, profile) {
 /**
  * The editor form for one profile.
  */
-class ProfileForm {
+export class ProfileForm {
     /** @param {Record<string, any>} profile */
     constructor(profile) {
         this.profile = profile;
@@ -178,6 +181,9 @@ class ProfileForm {
         /** @type {Map<string, { include: HTMLInputElement, control: HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement }>} */
         this.rows = new Map();
         this.modelsLoaded = false;
+        this.modelRequest = new RequestSlot();
+        this.disposed = false;
+        openForms.add(this);
         this.render();
     }
 
@@ -243,11 +249,16 @@ class ProfileForm {
         this.updateModelStatus();
         // Changing API or URL changes which models exist.
         for (const key of ['api', 'api-url']) {
-            this.rows.get(key)?.control.addEventListener('change', () => {
+            const invalidate = () => {
+                this.modelRequest.cancel();
                 this.modelsLoaded = false;
                 this.models = undefined;
+                this.root.querySelector('#thread_tools_pe_models')?.replaceChildren();
                 this.updateModelStatus();
-            });
+            };
+            this.rows.get(key)?.control.addEventListener('input', invalidate);
+            this.rows.get(key)?.control.addEventListener('change', invalidate);
+            this.rows.get(key)?.include.addEventListener('change', invalidate);
         }
     }
 
@@ -255,23 +266,43 @@ class ProfileForm {
         return String(this.rows.get(key)?.control.value ?? '');
     }
 
-    async loadModels() {
+    loadModels() {
+        if (this.disposed) return Promise.resolve();
         const status = this.root.querySelector('.thread_tools_pe_model_status');
         const list = this.root.querySelector('#thread_tools_pe_models');
         if (!status || !list) {
-            return;
+            return Promise.resolve();
         }
-        this.modelsLoaded = true;
-        status.textContent = 'Loading models…';
         const target = {
             mode: this.profile.mode,
             api: this.getValue('api') || this.profile.api,
             url: this.rows.get('api-url')?.include.checked ? this.getValue('api-url') : '',
         };
-        const models = await fetchEndpointModels(target);
-        list.replaceChildren(...models.map(m => new Option(m, m)));
-        this.models = models;
-        this.updateModelStatus();
+        const key = JSON.stringify(target);
+        status.textContent = 'Loading models…';
+        return this.modelRequest.run(key, signal => fetchEndpointModels(target, { signal }), models => {
+            this.modelsLoaded = true;
+            // No spread into replaceChildren: large model catalogs can exceed
+            // the engine's argument limit. The old list is released first.
+            list.replaceChildren();
+            for (const model of models) list.append(new Option(model, model));
+            this.models = models;
+            this.updateModelStatus();
+        }).catch(error => {
+            if (this.disposed || this.modelRequest.pending?.key && this.modelRequest.pending.key !== key) return;
+            this.modelsLoaded = false;
+            status.textContent = error?.name === 'TimeoutError' ? 'Model list request timed out. Try again.' : 'Could not load the model list. Try again.';
+            console.warn(LOG_PREFIX, 'Model list request failed', error);
+        });
+    }
+
+    dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
+        this.modelRequest.dispose();
+        this.models = undefined;
+        this.root.querySelector('#thread_tools_pe_models')?.replaceChildren();
+        openForms.delete(this);
     }
 
     updateModelStatus() {
@@ -374,22 +405,28 @@ export async function openProfileEditor(profileId) {
     formHost.append(form.root);
 
     picker.addEventListener('change', async () => {
+        const revision = ++pickerRevision;
         const next = profiles.find(p => p.id === picker.value);
         if (!next) {
             return;
         }
         if (form.dirty) {
             const discard = await context.callGenericPopup(`Discard unsaved changes to "${profile.name}"?`, context.POPUP_TYPE.CONFIRM);
+            if (editorClosed || revision !== pickerRevision) return;
             if (!discard) {
                 picker.value = profile.id;
                 return;
             }
         }
+        if (editorClosed || revision !== pickerRevision) return;
+        form.dispose();
         profile = next;
         form = new ProfileForm(profile);
         formHost.replaceChildren(form.root);
     });
 
+    let pickerRevision = 0;
+    let editorClosed = false;
     /** @type {Record<string, any>|null} */
     let updated = null;
     const popup = new context.Popup(root, context.POPUP_TYPE.TEXT, '', {
@@ -413,7 +450,14 @@ export async function openProfileEditor(profileId) {
         },
     });
 
-    const result = await popup.show();
+    let result;
+    try {
+        result = await popup.show();
+    } finally {
+        editorClosed = true;
+        pickerRevision++;
+        form.dispose();
+    }
     if (!updated) {
         return;
     }
@@ -474,16 +518,26 @@ export default {
     },
 
     init(featureApi) {
+        if (readySubscription) readySubscription();
         api = featureApi;
         // The connection manager builds its toolbar during startup; wait for the app to be ready.
         const { eventSource, event_types } = SillyTavern.getContext();
         const place = () => api.isEnabled() && addToolbarButton();
         place();
         eventSource.on(event_types.APP_READY, place);
+        readySubscription = () => (eventSource.removeListener || eventSource.off)?.call(eventSource, event_types.APP_READY, place);
     },
 
     onToggle(enabled) {
+        if (!enabled) for (const form of [...openForms]) form.dispose();
         enabled ? addToolbarButton() : removeToolbarButton();
+    },
+
+    dispose() {
+        readySubscription?.();
+        readySubscription = null;
+        for (const form of [...openForms]) form.dispose();
+        removeToolbarButton();
     },
 };
 

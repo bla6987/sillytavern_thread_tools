@@ -13,6 +13,17 @@ const CONNECT_POLL_MS = 250;
 /** @type {import('../../core.js').FeatureApi} */
 let api;
 let reconcileRun = 0;
+let reconcileController = null;
+let unsubscribe = null;
+let rememberTimer = null;
+
+function cancelReconcile() {
+    reconcileRun++;
+    reconcileController?.abort();
+    reconcileController = null;
+    if (rememberTimer !== null) clearTimeout(rememberTimer);
+    rememberTimer = null;
+}
 
 /**
  * Records the model in use for the current endpoint.
@@ -62,27 +73,38 @@ function isConnecting() {
         .some(el => el instanceof HTMLElement && el.offsetParent !== null);
 }
 
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms, signal) => new Promise(resolve => {
+    if (signal.aborted) return resolve(false);
+    const finish = value => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+    };
+    const abort = () => finish(false);
+    const timer = setTimeout(() => finish(true), ms);
+    signal.addEventListener('abort', abort, { once: true });
+});
 
-async function waitForConnection(run) {
-    await delay(CONNECT_START_DELAY_MS);
+async function waitForConnection(run, signal) {
+    if (!await delay(CONNECT_START_DELAY_MS, signal)) return false;
     const deadline = Date.now() + CONNECT_TIMEOUT_MS;
     while (isConnecting() && Date.now() < deadline) {
         if (run !== reconcileRun) {
             return false;
         }
-        await delay(CONNECT_POLL_MS);
+        if (!await delay(CONNECT_POLL_MS, signal)) return false;
     }
-    return run === reconcileRun;
+    return run === reconcileRun && api.isEnabled();
 }
 
-async function setModel(model) {
+async function setModel(model, isCurrent) {
     const { SlashCommandParser } = SillyTavern.getContext();
     const command = SlashCommandParser?.commands?.model;
     if (!command) {
         throw new Error('The /model command is not available');
     }
     await command.callback({ quiet: 'true' }, model);
+    if (!isCurrent()) return;
 
     // /model only fills the Custom endpoint's model ID box; show the pick in its model list too.
     const customList = document.getElementById('model_custom_select');
@@ -93,7 +115,8 @@ async function setModel(model) {
 }
 
 async function onProfileLoaded(profileName) {
-    const run = ++reconcileRun;
+    cancelReconcile();
+    const run = reconcileRun;
     if (!api.isEnabled()) {
         return;
     }
@@ -103,11 +126,16 @@ async function onProfileLoaded(profileName) {
         return;
     }
 
-    if (!await waitForConnection(run)) {
+    reconcileController = new AbortController();
+    if (!await waitForConnection(run, reconcileController.signal)) {
         return;
     }
 
     const endpoint = getCurrentEndpoint();
+    const current = () => run === reconcileRun && api.isEnabled()
+        && getCurrentEndpoint().key === endpoint.key && findLoadedProfile(profileName) === profile
+        && (!SillyTavern.getContext().extensionSettings.connectionManager?.selectedProfile
+            || SillyTavern.getContext().extensionSettings.connectionManager.selectedProfile === profile.id);
     const { control, available } = getModelState();
     if (!control) {
         return;
@@ -122,13 +150,16 @@ async function onProfileLoaded(profileName) {
     }
 
     try {
+        if (!current()) return;
         if (decision.changed) {
-            await setModel(decision.model);
+            await setModel(decision.model, current);
         }
     } catch (error) {
         console.error(LOG_PREFIX, 'Failed to set model', error);
         return;
     }
+
+    if (!current()) return;
 
     let saved = false;
     if (api.settings.saveToProfile) {
@@ -160,7 +191,8 @@ function onUserPickedModel(event) {
         return;
     }
     // Custom endpoints mirror the picked list item into the model ID input afterwards.
-    setTimeout(() => rememberCurrentModel('user pick'), 0);
+    if (rememberTimer !== null) clearTimeout(rememberTimer);
+    rememberTimer = setTimeout(() => { rememberTimer = null; rememberCurrentModel('user pick'); }, 0);
 }
 
 function escapeHtml(value) {
@@ -242,6 +274,8 @@ export default {
     },
 
     init(featureApi) {
+        unsubscribe?.();
+        cancelReconcile();
         api = featureApi;
         if (!api.settings.endpoints || typeof api.settings.endpoints !== 'object') {
             api.settings.endpoints = {};
@@ -253,5 +287,19 @@ export default {
         eventSource.on(event_types.GENERATION_STARTED, onGenerationStarted);
         document.addEventListener('change', onUserPickedModel, true);
         $(document).on('select2:select', onUserPickedModel);
+        unsubscribe = () => {
+            const off = eventSource.removeListener || eventSource.off;
+            off?.call(eventSource, event_types.CONNECTION_PROFILE_LOADED, onProfileLoaded);
+            off?.call(eventSource, event_types.GENERATION_STARTED, onGenerationStarted);
+            document.removeEventListener('change', onUserPickedModel, true);
+            $(document).off('select2:select', onUserPickedModel);
+        };
+    },
+
+    onToggle(enabled) { if (!enabled) cancelReconcile(); },
+    dispose() {
+        cancelReconcile();
+        unsubscribe?.();
+        unsubscribe = null;
     },
 };

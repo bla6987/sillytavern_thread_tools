@@ -27,6 +27,9 @@ Edit what's saved in any connection profile without switching to it: name, API, 
 - Open it from the **sliders** button next to the connection profile list (API Connections panel), or from its section in Thread Tools.
 - Untick a setting to leave it out of the profile. The profile then doesn't change that setting when it loads, and SillyTavern's **Update** button won't record it again.
 - The model field can load the model list straight from the profile's endpoint (click the field or the refresh button), and it warns when the typed model isn't offered.
+  Repeated requests for the same endpoint share one in-flight request. Changing its API/URL, switching
+  the edited profile, closing the popup, or disabling the feature cancels pending work. Requests time out
+  after 15 seconds, and late responses cannot replace a newer model list.
 - **Save** only saves. **Save & load** also switches to the profile. If you edit the active profile with plain Save, reload it to apply the changes.
 
 ## Adding a feature
@@ -35,6 +38,9 @@ Edit what's saved in any connection profile without switching to it: name, API, 
 2. Register it in `index.js`.
 
 Keep pure logic in a separate `logic.js` next to it so it can be unit-tested without a browser.
+Features that own timers, requests or global subscriptions should also provide `dispose()`. The core
+calls it before reinitialization; profile reconnection polling is cancelled on replacement, disabling
+or disposal. These lifecycle controls work without any other extension or runtime event bus.
 
 ## Install
 

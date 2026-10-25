@@ -21,6 +21,7 @@ export const LOG_PREFIX = '[Thread Tools]';
 
 /** @type {Feature[]} */
 const features = [];
+let initialized = false;
 
 /**
  * Adds a feature. Call before initFeatures().
@@ -121,6 +122,8 @@ function renderFeatureSection(list, feature, api) {
 }
 
 export function initFeatures() {
+    if (initialized) disposeFeatures();
+    initialized = true;
     const list = renderPanel();
     for (const feature of features) {
         try {
@@ -133,4 +136,13 @@ export function initFeatures() {
             console.error(LOG_PREFIX, `Failed to start feature "${feature.id}"`, error);
         }
     }
+}
+
+/** Release timers, in-flight requests and listeners before a local reinitialization. */
+export function disposeFeatures() {
+    for (const feature of features) {
+        try { feature.dispose?.(); } catch (error) { console.warn(LOG_PREFIX, 'Feature cleanup failed', error); }
+    }
+    document.getElementById('thread_tools_settings')?.remove();
+    initialized = false;
 }
